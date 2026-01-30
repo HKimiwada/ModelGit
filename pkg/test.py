@@ -63,49 +63,51 @@ def test_model_guard():
 
     # --- SIMULATION LOOP ---
     for step in range(50):
-        time.sleep(0.1) # Just to make the demo readable
+        time.sleep(0.1) 
         
         # 1. Simulate Data
-        # Normal data: Input 1.0 -> Target 1.0
-        # Poison data: Input 1.0 -> Target -10.0 (Will cause huge error)
         inputs = torch.randn(1, 10)
-        
         if 25 <= step <= 35: 
-            # INJECT POISON between steps 25 and 35
-            # This simulates "Concept Drift" or corrupted sensors
-            targets = torch.randn(1, 1) * 50 
+            targets = torch.randn(1, 1) * 50  # Poison
             is_poison = True
             print(f"Step {step} [POISON BATCH] ", end="")
         else:
-            # Healthy Data
-            targets = torch.randn(1, 1)
+            targets = torch.randn(1, 1)       # Healthy
             is_poison = False
             print(f"Step {step} [Normal Batch] ", end="")
 
-        # 2. Standard Training Step
+        # 2. Forward Pass ONLY (Do not backward yet!)
         outputs = model(inputs)
         loss = nn.MSELoss()(outputs, targets)
-        
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        
         loss_val = loss.item()
         
-        # 3. THE GUARDIAN INTERVENTION
+        # 3. Ask Guardian: "Is it safe to proceed?"
         status = guardian.step(step, loss_val)
         
-        # Visual Feedback
+        # 4. Conditional Updates based on Guardian's verdict
         if status == "safe":
+            # ✅ GREEN LIGHT: Safe to learn
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
             print(f"✅ Loss: {loss_val:.2f}")
+
         elif status == "warning":
-            # Warning is printed inside class
-            pass
+            # ⚠️ YELLOW LIGHT: Learn, but be careful
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            # Warning is printed inside guardian.step()
+
         elif status == "reverted":
-            print("   Testing fix... (skipping this batch)")
-            # In a real loop, you might also skip the next data loader item
+            # 🛑 RED LIGHT: Do NOT learn. 
+            # We just loaded a snapshot. If we learn now, we re-corrupt it.
+            print(f"   🛑 Revert triggered. Skipping Step {step}.")
+
         elif status == "cooldown":
-            print(f"🧊 Cooldown Mode. Loss: {loss_val:.2f}")
+            # 🧊 BLUE LIGHT: Frozen. Do NOT learn.
+            # We are waiting for the poison data to pass.
+            print(f"   🧊 Cooldown (Frozen). Loss: {loss_val:.2f}")
 
     print(f"\n🏁 Training Complete. Total Auto-Reverts: {guardian.total_reverts}")
 

@@ -32,7 +32,7 @@ class AutoGuardian:
         if self.cooldown_counter > 0:
             self.cooldown_counter -= 1
             # Still record history, but don't check for drift
-            self.history.commit(step_num, current_loss, tag="cooldown")
+            # self.history.commit(step_num, current_loss, tag="cooldown")
             return "cooldown"
 
         # 2. Calculate Baseline (Moving Average of last 50 steps)
