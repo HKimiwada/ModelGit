@@ -1,24 +1,28 @@
+"""
+Streamlit Real-Time Dashboard for Sentinel RL.
+Run: streamlit run dashboard.py
+"""
+
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import time
 import os
-from pkg import bridge  # Import constants
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from pkg import bridge
 
 # --- PAGE CONFIG ---
 st.set_page_config(
-    page_title="ModelGit Mission Control",
+    page_title="Sentinel RL — Mission Control",
     page_icon="🛡️",
-    layout="wide"
+    layout="wide",
 )
 
-# --- CSS STYLING ---
 st.markdown("""
 <style>
-    /* Status Badge Styling */
-    .stAlert {font-weight: bold;}
-    
-    /* Button Styling */
     div[data-testid="stHorizontalBlock"] > div:nth-child(1) button {
         background-color: #FF4B4B; color: white; border: none; height: 50px; font-size: 16px;
     }
@@ -31,22 +35,23 @@ st.markdown("""
 # --- HEADER ---
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.title("🛡️ ModelGit Guardian")
-    st.caption("Active Runtime Protection & Auto-Remediation System")
+    st.title("🛡️ Sentinel RL — Mission Control")
+    st.caption("Multi-Signal Runtime Protection & Auto-Remediation")
 with col2:
     status_placeholder = st.empty()
 
-# --- REAL-TIME METRICS ---
-m1, m2, m3, m4 = st.columns(4)
+# --- METRICS ROW ---
+m1, m2, m3, m4, m5 = st.columns(5)
 with m1: step_metric = st.empty()
 with m2: loss_metric = st.empty()
-with m3: buffer_metric = st.empty()
-with m4: revert_metric = st.empty()
+with m3: reward_metric = st.empty()
+with m4: entropy_metric = st.empty()
+with m5: revert_metric = st.empty()
 
-# --- MAIN CHART ---
+# --- CHARTS ---
 chart_placeholder = st.empty()
 
-# --- CONTROL PANEL ---
+# --- CONTROLS ---
 st.divider()
 st.subheader("Manual Interventions")
 c1, c2 = st.columns(2)
@@ -67,77 +72,101 @@ with c2:
 while True:
     if os.path.exists(bridge.LOG_FILE):
         try:
-            # 1. Read Data
             df = pd.read_csv(bridge.LOG_FILE)
-            
+
             if not df.empty:
                 latest = df.iloc[-1]
-                current_status = latest['status']
-                
-                # 2. Update Status Badge
-                if current_status == "safe":
-                    status_placeholder.success("SYSTEM HEALTHY")
-                elif current_status == "warning":
-                    status_placeholder.warning("⚠️ DRIFT DETECTED")
-                elif current_status == "reverted":
-                    status_placeholder.error("🚨 REVERTING MODEL...")
-                elif current_status == "cooldown":
-                    status_placeholder.info("🧊 COOLING DOWN")
+                current_status = latest["status"]
 
-                # 3. Update Metrics
-                step_metric.metric("Current Step", int(latest['step']))
-                loss_metric.metric("Current Loss", f"{latest['loss']:.4f}")
-                
-                # Calculate simple moving average for visual clarity
-                df['loss_ma'] = df['loss'].rolling(window=5).mean()
-                
-                # Count total interventions
-                total_reverts = len(df[df['status'] == 'reverted'])
-                revert_metric.metric("Auto-Interventions", total_reverts)
-                
-                # 4. Render Chart
-                fig = go.Figure()
-                
-                # A. The Loss Line
-                fig.add_trace(go.Scatter(
-                    x=df['step'], y=df['loss'],
-                    mode='lines', name='Raw Loss',
-                    line=dict(color='#333333', width=1),
-                    opacity=0.5
-                ))
-                
-                fig.add_trace(go.Scatter(
-                    x=df['step'], y=df['loss_ma'],
-                    mode='lines', name='Smoothed Loss',
-                    line=dict(color='#00CC96', width=3)
-                ))
+                # Status badge
+                badge = {
+                    "safe": ("SYSTEM HEALTHY", "success"),
+                    "warning": ("⚠️ DRIFT DETECTED", "warning"),
+                    "reverted": ("🚨 REVERTING MODEL", "error"),
+                    "cooldown": ("🧊 COOLING DOWN", "info"),
+                    "pre_warning": ("🔮 PREDICTIVE ALERT", "warning"),
+                    "warmup": ("🔥 WARMING UP", "info"),
+                }
+                text, method = badge.get(current_status, ("UNKNOWN", "info"))
+                getattr(status_placeholder, method)(text)
 
-                # B. The Revert Markers (The "Red X")
-                revert_events = df[df['status'] == 'reverted']
-                if not revert_events.empty:
-                    fig.add_trace(go.Scatter(
-                        x=revert_events['step'], y=revert_events['loss'],
-                        mode='markers', name='Intervention',
-                        marker=dict(color='red', size=15, symbol='x')
-                    ))
-                
-                # C. The Cooldown Zones (Blue Shading)
-                # (Optional advanced visualization: shade areas where status == cooldown)
-                
-                fig.update_layout(
-                    title="Real-Time Loss Landscape",
-                    xaxis_title="Step",
-                    yaxis_title="Loss",
-                    template="plotly_dark",
-                    height=450,
-                    margin=dict(l=10, r=10, t=40, b=10),
-                    yaxis_range=[0, max(10, df['loss'].max() + 5)]
+                # Metrics
+                step_metric.metric("Step", int(latest["step"]))
+                loss_metric.metric("Loss", f"{latest['loss']:.4f}")
+                reward_metric.metric("Reward", f"{latest.get('reward', 0):.1f}")
+                entropy_metric.metric("Entropy", f"{latest.get('entropy', 0):.3f}")
+                total_reverts = len(df[df["status"] == "reverted"])
+                revert_metric.metric("Reverts", total_reverts)
+
+                # Multi-panel chart
+                fig = make_subplots(
+                    rows=2, cols=2,
+                    subplot_titles=("Loss", "Reward", "Entropy", "Grad Norm"),
+                    vertical_spacing=0.12,
                 )
-                
+
+                # Loss
+                df["loss_ma"] = df["loss"].rolling(window=5).mean()
+                fig.add_trace(go.Scatter(
+                    x=df["step"], y=df["loss"],
+                    mode="lines", name="Raw Loss",
+                    line=dict(color="#555", width=1), opacity=0.4,
+                ), row=1, col=1)
+                fig.add_trace(go.Scatter(
+                    x=df["step"], y=df["loss_ma"],
+                    mode="lines", name="Smoothed Loss",
+                    line=dict(color="#00CC96", width=2),
+                ), row=1, col=1)
+
+                # Reward
+                if "reward" in df.columns:
+                    df["reward_ma"] = df["reward"].rolling(window=5).mean()
+                    fig.add_trace(go.Scatter(
+                        x=df["step"], y=df["reward_ma"],
+                        mode="lines", name="Reward",
+                        line=dict(color="#636EFA", width=2),
+                    ), row=1, col=2)
+
+                # Entropy
+                if "entropy" in df.columns:
+                    fig.add_trace(go.Scatter(
+                        x=df["step"], y=df["entropy"],
+                        mode="lines", name="Entropy",
+                        line=dict(color="#EF553B", width=2),
+                    ), row=2, col=1)
+
+                # Grad Norm
+                if "grad_norm" in df.columns:
+                    fig.add_trace(go.Scatter(
+                        x=df["step"], y=df["grad_norm"],
+                        mode="lines", name="Grad Norm",
+                        line=dict(color="#AB63FA", width=2),
+                    ), row=2, col=2)
+
+                # Revert markers on all panels
+                reverts = df[df["status"] == "reverted"]
+                if not reverts.empty:
+                    for row, col, metric in [
+                        (1, 1, "loss"), (1, 2, "reward"),
+                        (2, 1, "entropy"), (2, 2, "grad_norm"),
+                    ]:
+                        if metric in reverts.columns:
+                            fig.add_trace(go.Scatter(
+                                x=reverts["step"], y=reverts[metric],
+                                mode="markers", name="Revert",
+                                marker=dict(color="red", size=12, symbol="x"),
+                                showlegend=(row == 1 and col == 1),
+                            ), row=row, col=col)
+
+                fig.update_layout(
+                    template="plotly_dark",
+                    height=550,
+                    margin=dict(l=10, r=10, t=40, b=10),
+                    showlegend=True,
+                )
                 chart_placeholder.plotly_chart(fig, use_container_width=True)
 
-        except Exception as e:
-            # Prevent crashing on file read collisions
+        except Exception:
             pass
-            
-    time.sleep(0.5) # Refresh rate
+
+    time.sleep(0.5)

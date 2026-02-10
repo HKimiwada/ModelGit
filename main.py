@@ -1,60 +1,64 @@
+"""
+Interactive Training Demo — works with Streamlit dashboard.
+Run this in one terminal, `streamlit run dashboard.py` in another.
+"""
+
 import torch
 import torch.nn as nn
 import time
 import random
 import sys
+import os
 
-# Import from our custom package
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pkg import ModelHistory, AutoGuardian, bridge
+
 
 def run_training_demo():
     # --- SETUP ---
     model = nn.Linear(10, 1)
     optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
 
-    # Initialize ModelGit System
-    history = ModelHistory(model, max_memory_slots=100)
-    # Sensitivity 2.0 = Panic if loss is 2x higher than average
-    guardian = AutoGuardian(history, sensitivity=2.0, patience=2, cooldown=5)
+    history = ModelHistory(model, max_fine_slots=100)
+    guardian = AutoGuardian(
+        history,
+        metrics_config={
+            "loss": {"sensitivity": 2.0, "direction": "lower_is_better"},
+        },
+        patience=2,
+        cooldown=5,
+        total_steps=500,
+    )
 
-    # Initialize Dashboard Logs
     bridge.init_log()
-    print("🛡️  Guardian Online. Dashboard Bridge Active.")
-    print("   Run 'streamlit run dashboard.py' in another terminal to control this.")
+    print("🛡️  Sentinel Guardian Online. Dashboard Bridge Active.")
+    print("   Run 'streamlit run dashboard.py' in another terminal.")
 
-    # State flags for the demo
     manual_poison = False
-    
-    # --- LOOP ---
-    for step in range(500): # Long loop for demo purposes
-        time.sleep(0.3) # Slow down slightly so we can watch the dashboard
-        
-        # 1. Check for Dashboard Commands
+
+    for step in range(500):
+        time.sleep(0.3)
+
+        # 1. Dashboard Commands
         cmd = bridge.check_commands()
         if cmd == "POISON_ON":
             manual_poison = True
             print(f"\n[COMMAND] ☣️  Received POISON_ON signal!")
         elif cmd == "REVERT_NOW":
             print(f"\n[COMMAND] ⏪ Received REVERT_NOW signal!")
-            guardian._trigger_emergency_protocol(step)
+            guardian._trigger_emergency(step, "manual", {"loss": 999})
 
-        # 2. Generate Data (Simulate Environment)
+        # 2. Generate Data
         inputs = torch.randn(1, 10)
-        
-        # Poison Condition: 
-        # Triggered by (Manual Button) OR (Hardcoded Steps 50-70)
         is_poison_active = manual_poison or (50 <= step <= 70)
-        
+
         if is_poison_active:
-            # POISON DATA: Target is wildly wrong (-50.0)
             targets = torch.randn(1, 1) + 50.0
             print(f"Step {step} [☣️ POISON] ", end="")
-            # Auto-disable manual poison after 20 steps to let it heal
-            if manual_poison and random.random() < 0.05: 
+            if manual_poison and random.random() < 0.05:
                 manual_poison = False
-                print("(Poison supply exhausted) ", end="")
+                print("(Poison exhausted) ", end="")
         else:
-            # NORMAL DATA: Target is normal distribution
             targets = torch.randn(1, 1)
             print(f"Step {step} [Normal]    ", end="")
 
@@ -63,33 +67,33 @@ def run_training_demo():
         loss = nn.MSELoss()(outputs, targets)
         loss_val = loss.item()
 
-        # 4. Guardian Safety Check
-        status = guardian.step(step, loss_val)
+        # Compute gradient norm
+        optimizer.zero_grad()
+        loss.backward()
+        grad_norm = sum(
+            p.grad.data.norm(2).item() ** 2
+            for p in model.parameters() if p.grad is not None
+        ) ** 0.5
 
-        # 5. Conditional Update Logic
-        if status == "safe":
-            optimizer.zero_grad()
-            loss.backward()
+        metrics = {"loss": loss_val, "grad_norm": grad_norm}
+
+        # 4. Guardian Check
+        status = guardian.step(step, metrics)
+
+        # 5. Conditional Update
+        if status in ("safe", "warning", "warmup", "pre_warning"):
             optimizer.step()
             print(f"✅ Loss: {loss_val:.4f}")
-            
-        elif status == "warning":
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            # (Warning printed by guardian internal logic)
-
         elif status == "reverted":
-            # 🛑 STOP! Do not learn.
             print(f"🛑 REVERTING! Skipping update.")
-            
+            optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
         elif status == "cooldown":
-            # 🧊 FREEZE! Do not learn.
             print(f"🧊 Cooldown. Loss: {loss_val:.4f} (Ignored)")
 
-        # 6. Write to Bridge (For Dashboard)
-        bridge.write_state(step, loss_val, status, len(history.timeline))
-        bridge.append_history(step, loss_val, status)
+        # 6. Bridge
+        bridge.write_state(step, metrics, status, len(history.fine_timeline))
+        bridge.append_history(step, metrics, status)
+
 
 if __name__ == "__main__":
     try:
